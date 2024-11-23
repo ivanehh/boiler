@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"strings"
 
-	"dcs-lib/internal/helpers"
+	"github.com/ivanehh/boiler/internal/helpers"
 )
 
 type dbMode int

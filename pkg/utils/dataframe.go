@@ -8,8 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"dcs-lib/pkg/logging"
-
+	"github.com/ivanehh/boiler/pkg/logging"
 	"github.com/pbnjay/grate"
 	_ "github.com/pbnjay/grate/simple"
 	_ "github.com/pbnjay/grate/xls"

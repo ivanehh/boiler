@@ -3,12 +3,12 @@ package logging
 import (
 	"strconv"
 
-	h "dcs-lib/internal/helpers"
+	"github.com/ivanehh/boiler/internal/helpers"
 )
 
 type MapableError interface {
 	error
-	h.Mapable
+	helpers.Mapable
 }
 
 type ConfigurableError interface {

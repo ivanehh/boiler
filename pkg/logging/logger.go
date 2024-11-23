@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	h "dcs-lib/internal/helpers"
+	"github.com/ivanehh/boiler/internal/helpers"
 )
 
 const MaxStackSize int = 5
@@ -25,7 +25,7 @@ type LogConfiguration interface {
 
 type structuredError interface {
 	error
-	h.Mapable
+	helpers.Mapable
 }
 
 type DCSlogger struct {
