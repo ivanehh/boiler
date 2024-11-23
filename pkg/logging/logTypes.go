@@ -3,12 +3,12 @@ package logging
 import (
 	"strconv"
 
-	"github.com/ivanehh/boiler/internal/helpers"
+	"github.com/ivanehh/boiler/pkg"
 )
 
 type MapableError interface {
 	error
-	helpers.Mapable
+	pkg.Mapable
 }
 
 type ConfigurableError interface {

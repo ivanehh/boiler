@@ -1,4 +1,4 @@
-package helpers
+package pkg
 
 type Config interface {
 	Sources() Sources
