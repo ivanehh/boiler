@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"strings"
 
-	pkg "github.com/ivanehh/boiler/pkg"
+	b "github.com/ivanehh/boiler"
 )
 
 type dbMode int
@@ -37,7 +37,7 @@ const (
 	prod  dbMode = iota
 )
 
-var conStr func(s pkg.IOWithAuth) string = func(s pkg.IOWithAuth) string {
+var conStr func(s b.IOWithAuth) string = func(s b.IOWithAuth) string {
 	auth := s.Auth()
 	connectData := struct {
 		Username string
@@ -63,18 +63,17 @@ type Database struct {
 	open       bool
 }
 
-func NewDatabase(c pkg.Config, name string) (*Database, error) {
-	var src pkg.IOWithAuth
+func NewDatabase(c b.Config, name string, dbType string) (*Database, error) {
+	var src b.IOWithAuth
 	var db *Database
 	for _, source := range c.Sources().Databases() {
-		if source.Enabled() && source.Type() == "mssql" {
+		if source.Enabled() && source.Type() == dbType {
 			if strings.Contains(source.Name(), name) {
 				src = source
 				db = &Database{
 					connString: conStr(src),
 					prepStmts:  make(map[string]*sql.Stmt),
 				}
-				fmt.Printf("db: %+v\n", db)
 				return db, nil
 			}
 		}
