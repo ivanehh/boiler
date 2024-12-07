@@ -57,20 +57,22 @@ var conStr func(s b.IOWithAuth) string = func(s b.IOWithAuth) string {
 }
 
 type Database struct {
-	db         *sql.DB
+	*sql.DB
+	driver     string
 	connString string
 	prepStmts  map[string]*sql.Stmt
 	open       bool
 }
 
-func NewDatabase(c b.Config, name string, dbType string) (*Database, error) {
+func NewDatabase(c b.Config, name string, dbDriver string) (*Database, error) {
 	var src b.IOWithAuth
 	var db *Database
 	for _, source := range c.Sources().Databases() {
-		if source.Enabled() && source.Type() == dbType {
+		if source.Enabled() && source.Type() == dbDriver {
 			if strings.Contains(source.Name(), name) {
 				src = source
 				db = &Database{
+					driver:     dbDriver,
 					connString: conStr(src),
 					prepStmts:  make(map[string]*sql.Stmt),
 				}
@@ -83,7 +85,7 @@ func NewDatabase(c b.Config, name string, dbType string) (*Database, error) {
 
 func (pdb *Database) Open() error {
 	var err error
-	pdb.db, err = sql.Open("mssql", pdb.connString)
+	pdb.DB, err = sql.Open(pdb.driver, pdb.connString)
 	if err != nil {
 		return err
 	}
@@ -93,7 +95,7 @@ func (pdb *Database) Open() error {
 }
 
 func (pdb *Database) Close() error {
-	err := pdb.db.Close()
+	err := pdb.DB.Close()
 	if err != nil {
 		return err
 	}
@@ -101,7 +103,10 @@ func (pdb *Database) Close() error {
 	return nil
 }
 
-func (pdb *Database) Query(qc Query, params ...any) (QueryUnwrapper, error) {
+// Deprecated: QueryWithWrap - deprecated in favor of using sqlc
+//
+//go:deprecated
+func (pdb *Database) QueryWithWrap(qc Query, params ...any) (QueryUnwrapper, error) {
 	var stmt *sql.Stmt
 	var ok bool
 	var err error
@@ -112,7 +117,7 @@ func (pdb *Database) Query(qc Query, params ...any) (QueryUnwrapper, error) {
 	}
 	defer pdb.Close()
 	if stmt, ok = pdb.prepStmts[reflect.TypeOf(qc).Name()]; !ok {
-		stmt, err = pdb.db.Prepare(qc.Construct())
+		stmt, err = pdb.Prepare(qc.Construct())
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +132,10 @@ func (pdb *Database) Query(qc Query, params ...any) (QueryUnwrapper, error) {
 	return qc, nil
 }
 
-func (pdb *Database) Execute(qc QueryConstructor, params ...any) (sql.Result, error) {
+// Deprecated: ExecuteWithConstructor - deprecated in favor of using sqlc
+//
+//go:deprecated
+func (pdb *Database) ExecuteWithConstructor(qc QueryConstructor, params ...any) (sql.Result, error) {
 	var stmt *sql.Stmt
 	var ok bool
 	var err error
@@ -138,7 +146,7 @@ func (pdb *Database) Execute(qc QueryConstructor, params ...any) (sql.Result, er
 	}
 	defer pdb.Close()
 	if stmt, ok = pdb.prepStmts[reflect.TypeOf(qc).Name()]; !ok {
-		stmt, err = pdb.db.Prepare(qc.Construct())
+		stmt, err = pdb.Prepare(qc.Construct())
 		if err != nil {
 			return nil, fmt.Errorf("statement construction error:%w", err)
 		}
