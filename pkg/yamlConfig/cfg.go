@@ -1,4 +1,4 @@
-package config
+package yamlConfig
 
 /*
 Defines config importer and provides it to rest of application
