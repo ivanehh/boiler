@@ -1,9 +1,5 @@
 package yamlConfig
 
-/*
-Defines config importer and provides it to rest of application
-*/
-
 import (
 	"errors"
 	"fmt"
@@ -11,205 +7,155 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ivanehh/boiler"
 	"github.com/ivanehh/boiler/internal/helpers"
 	"gopkg.in/yaml.v3"
 )
 
-var baseC *BaseConfig
+type ConfigManager struct {
+	current *BaseConfig
+	mu      sync.RWMutex
+}
+
+var manager = &ConfigManager{}
 
 type BaseConfig struct {
-	Svc    *service  `yaml:"service"`
-	Src    dataIO    `yaml:"sources"`
-	Dstns  dataIO    `yaml:"destinations"`
-	Log    logConfig `yaml:"logging"`
-	Ext    any       `yaml:"extension,omitempty"`
-	loaded bool
+	svc *service  `yaml:"service"`
+	io  dataIO    `yaml:"sources"`
+	log logConfig `yaml:"logging"`
+	ext any       `yaml:"extension,omitempty"`
 }
 
-func (bc BaseConfig) Service() service {
-	return *bc.Svc
-}
-
-func (bc BaseConfig) Sources() boiler.Sources {
-	return bc.Src
-}
-
-func (bc BaseConfig) Destinations() dataIO {
-	return bc.Dstns
-}
-
-func (bc BaseConfig) LogConfig() logConfig {
-	return bc.Log
-}
-
-func (bc BaseConfig) Extension() any {
-	return bc.Ext
-}
-
-/*  ExtensionAs does a simple type conversion for the generically consumed ConfigurationExtension */
-func ExtensionAs[T any](c *BaseConfig) (T, error) {
-	var trgtExt T
-	var extSrc map[string]any
-	var ok bool
-	if extSrc, ok = (baseC.Extension()).(map[string]any); !ok {
-		return trgtExt, fmt.Errorf("the provided extension is not of type %T", extSrc)
+func (bc *BaseConfig) Validate() error {
+	if bc.svc == nil {
+		return errors.New("service configuration is required")
 	}
-	yamlData, err := yaml.Marshal(c.Extension())
-	if err != nil {
-		return trgtExt, err
+	if bc.svc.port == 0 {
+		bc.svc.port = 8080 // Default port
 	}
-	err = yaml.Unmarshal(yamlData, &trgtExt)
-	if err != nil {
-		return trgtExt, err
+	if err := bc.io.Validate(); err != nil {
+		return fmt.Errorf("IO configuration error: %w", err)
 	}
-	return trgtExt, nil
+	return nil
 }
 
 type service struct {
-	Name    string `yaml:"name,omitempty"`
-	Purpose string `yaml:"purpose,omitempty"`
-	Port    int    `yaml:"port,omitempty"`
-}
-
-type destination struct {
-	Name      string      `yaml:"name"`
-	Type      string      `yaml:"type"`
-	Location  string      `yaml:"location"`
-	Port      string      `yaml:"port,omitempty"`
-	Enabled   bool        `yaml:"enabled"`
-	Endpoints []string    `yaml:"endpoints,omitempty"`
-	Auth      credentials `yaml:"auth,omitempty"`
+	name    string `yaml:"name" env:"SERVICE_NAME"`
+	purpose string `yaml:"purpose" env:"SERVICE_PURPOSE"`
+	port    int    `yaml:"port" env:"SERVICE_PORT" default:"8080"`
 }
 
 type dataIO struct {
-	Db   []dbSource   `yaml:"databases"`
-	Ftp  []ftpSource  `yaml:"ftp"`
-	Http []httpSource `yaml:"http"`
+	db    []secureSource   `yaml:"databases"`
+	http  []secureSource   `yaml:"http"`
+	other []insecureSource `yaml:"other"`
+}
+
+func (d *dataIO) Validate() error {
+	for _, db := range d.db {
+		if err := db.Validate(); err != nil {
+			return fmt.Errorf("database %s: %w", db.nam, err)
+		}
+	}
+	return nil
 }
 
 func (s dataIO) Databases() []boiler.IOWithAuth {
-	dbs := make([]boiler.IOWithAuth, len(s.Db))
-	for idx, d := range s.Db {
+	dbs := make([]boiler.IOWithAuth, len(s.db))
+	for idx, d := range s.db {
 		dbs[idx] = d
 	}
 	return dbs
 }
 
-func (s dataIO) FTPs() []boiler.IONoAuth {
-	ftps := make([]boiler.IONoAuth, len(s.Ftp))
-	for idx, f := range s.Ftp {
-		ftps[idx] = f
-	}
-	return ftps
-}
-
-func (s dataIO) HTTPs() []boiler.IONoAuth {
-	https := make([]boiler.IONoAuth, len(s.Http))
-	for idx, f := range s.Http {
+func (s dataIO) HTTPs() []boiler.IOWithAuth {
+	https := make([]boiler.IOWithAuth, len(s.http))
+	for idx, f := range s.http {
 		https[idx] = f
 	}
 	return https
 }
 
-type dbSource struct {
-	Nam   string      `yaml:"name,omitempty"`
-	Typ   string      `yaml:"type,omitempty"`
-	Enbl  bool        `yaml:"enabled,omitempty"`
-	Loc   string      `yaml:"location,omitempty"`
-	Rfrsh int         `yaml:"refresh,omitempty"`
-	Creds credentials `yaml:"auth,omitempty"`
+func (s dataIO) Others() []boiler.IONoAuth {
+	others := make([]boiler.IONoAuth, len(s.other))
+	for idx, f := range s.other {
+		others[idx] = f
+	}
+	return others
 }
 
-func (s dbSource) Enabled() bool {
-	return s.Enbl
+type secureSource struct {
+	nam   string      `yaml:"name"`
+	typ   string      `yaml:"type"`
+	enbl  bool        `yaml:"enabled"`
+	loc   string      `yaml:"location"`
+	creds credentials `yaml:"auth"`
 }
 
-func (s dbSource) Type() string {
-	return s.Typ
+func (s *secureSource) Validate() error {
+	if s.nam == "" {
+		return errors.New("name is required")
+	}
+	if s.loc == "" {
+		return errors.New("location is required")
+	}
+	if s.enbl {
+		if err := s.creds.Validate(); err != nil {
+			return fmt.Errorf("credentials error: %w", err)
+		}
+	}
+	return nil
 }
 
-func (s dbSource) Name() string {
-	return s.Nam
+// Implement boiler.IOWithAuth interface
+func (s secureSource) Auth() boiler.Credentials { return s.creds }
+func (s secureSource) Enabled() bool            { return s.enbl }
+func (s secureSource) Type() string             { return s.typ }
+func (s secureSource) Name() string             { return s.nam }
+func (s secureSource) Addr() string             { return s.loc }
+
+type insecureSource struct {
+	nam  string   `yaml:"name"`
+	typ  []string `yaml:"type"`
+	enbl bool     `yaml:"enabled"`
+	loc  string   `yaml:"location"`
 }
 
-func (s dbSource) Addr() string {
-	return s.Loc
-}
-
-func (s dbSource) Auth() boiler.Credentials {
-	return s.Creds
-}
-
-type httpSource struct {
-	Nam  string   `yaml:"name,omitempty"`
-	Typ  []string `yaml:"type,omitempty"`
-	Enbl bool     `yaml:"enabled,omitempty"`
-	Loc  string   `yaml:"location,omitempty"`
-}
-
-func (s httpSource) Enabled() bool {
-	return s.Enbl
-}
-
-func (s httpSource) Type() []string {
-	return s.Typ
-}
-
-func (s httpSource) Name() string {
-	return s.Nam
-}
-
-func (s httpSource) Addr() string {
-	return s.Loc
-}
-
-type ftpSource struct {
-	Nam  string   `yaml:"name,omitempty"`
-	Typ  []string `yaml:"type,omitempty"`
-	Enbl bool     `yaml:"enabled,omitempty"`
-	Loc  string   `yaml:"location,omitempty"`
-}
-
-func (s ftpSource) Enabled() bool {
-	return s.Enbl
-}
-
-func (s ftpSource) Type() []string {
-	return s.Typ
-}
-
-func (s ftpSource) Name() string {
-	return s.Nam
-}
-
-func (s ftpSource) Addr() string {
-	return s.Loc
-}
+// Implement boiler.IONoAuth interface
+func (s insecureSource) Enabled() bool  { return s.enbl }
+func (s insecureSource) Type() []string { return s.typ }
+func (s insecureSource) Name() string   { return s.nam }
+func (s insecureSource) Addr() string   { return s.loc }
 
 type credentials struct {
-	Uname string `yaml:"username,omitempty"`
-	Pwd   string `yaml:"password,omitempty"`
+	uname string `yaml:"username"`
+	pwd   string `yaml:"password"`
 }
 
-func (crd credentials) Username() string {
-	return crd.Uname
+func (c *credentials) Validate() error {
+	if c.uname == "" {
+		return errors.New("username is required for secure sources")
+	}
+	if c.pwd == "" {
+		return errors.New("password is required for secure sources")
+	}
+	return nil
 }
 
-func (crd credentials) Password() string {
-	return crd.Pwd
-}
+// Implement boiler.Credentials interface
+func (c credentials) Username() string { return c.uname }
+func (c credentials) Password() string { return c.pwd }
 
-// NOTE: The configuration might not work for plugging loggers into workplaces
 type logConfig struct {
-	Level   string `yaml:"level" json:"level,omitempty"`
-	Folder  string `yaml:"filePath" json:"file_path,omitempty"`
-	MaxSize int    `yaml:"maxSize" json:"max_size,omitempty"` // MaxFiles  int    `yaml:"maxFiles"`
+	level   string `yaml:"level" env:"LOG_LEVEL" default:"info"`
+	folder  string `yaml:"filePath" env:"LOG_PATH"`
+	maxSize int    `yaml:"maxSize" env:"LOG_MAX_SIZE" default:"100"`
 }
 
 func (lc logConfig) MinLevel() slog.Level {
-	switch strings.ToLower(lc.Level) {
+	switch strings.ToLower(lc.level) {
 	case "debug":
 		return slog.LevelDebug
 	case "info":
@@ -219,28 +165,39 @@ func (lc logConfig) MinLevel() slog.Level {
 	case "error":
 		return slog.LevelError
 	default:
-		fmt.Print("log level not recognized; returning LevelInfo")
 		return slog.LevelInfo
 	}
 }
 
-func (lc logConfig) Dir() string {
-	return lc.Folder
+func (lc logConfig) Dir() string      { return lc.folder }
+func (lc logConfig) MaxFileSize() int { return lc.maxSize }
+
+// ExtensionAs converts the generic extension configuration to a specific type
+func ExtensionAs[T any](c *BaseConfig) (T, error) {
+	var result T
+	if c.ext == nil {
+		return result, errors.New("no extension configuration found")
+	}
+
+	yamlData, err := yaml.Marshal(c.ext)
+	if err != nil {
+		return result, fmt.Errorf("failed to marshal extension: %w", err)
+	}
+
+	if err := yaml.Unmarshal(yamlData, &result); err != nil {
+		return result, fmt.Errorf("failed to unmarshal extension to target type: %w", err)
+	}
+
+	return result, nil
 }
 
-func (lc logConfig) MaxFileSize() int {
-	return lc.MaxSize
-}
-
-/*
-Load provides a BaseConfig either by
-
-- calculating the root path based on a hardcoded pattern (see implementation)
-
-- using the provided override; the override must be only 1 string argument; if more than 1 argument is provided then Load returns an empty BaseConfig and an error
-*/
+// Load reads and parses the configuration file
 func Load(override string) error {
-	baseC = &BaseConfig{}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	config := &BaseConfig{}
+
 	fp := override
 	if len(override) == 0 {
 		fp = filepath.Join(helpers.Rootpath(), "config", "cfg.yaml")
@@ -248,21 +205,42 @@ func Load(override string) error {
 	if !filepath.IsAbs(fp) {
 		fp = "/" + fp
 	}
+
 	yamlFile, err := os.ReadFile(fp)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read config file: %w", err)
 	}
-	err = yaml.Unmarshal(yamlFile, &baseC)
-	if err != nil {
-		return err
+
+	if err := yaml.Unmarshal(yamlFile, config); err != nil {
+		return fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	manager.current = config
 	return nil
 }
 
-// Provides an already loaded BaseConfig; panics if configuration hasn't been loaded
-func Provide() *BaseConfig {
-	if baseC == nil {
-		panic(errors.New("base configuration must be loaded first"))
-	}
-	return baseC
+// Reload refreshes the configuration from disk
+func Reload() error {
+	return Load("")
 }
+
+// Get returns the current configuration in a thread-safe manner
+func Get() *BaseConfig {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+
+	if manager.current == nil {
+		panic("configuration must be loaded before use")
+	}
+	return manager.current
+}
+
+// Getter methods for BaseConfig
+func (bc *BaseConfig) Service() *service       { return bc.svc }
+func (bc *BaseConfig) Sources() boiler.Sources { return bc.io }
+func (bc *BaseConfig) LogConfig() logConfig    { return bc.log }
+func (bc *BaseConfig) Extension() any          { return bc.ext }

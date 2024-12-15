@@ -6,7 +6,8 @@ type Config interface {
 
 type Sources interface {
 	Databases() []IOWithAuth
-	FTPs() []IONoAuth
+	HTTPs() []IOWithAuth
+	Others() []IONoAuth
 }
 
 type IOWithAuth interface {
