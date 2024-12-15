@@ -14,6 +14,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	MySQL   = "mysql"
+	MSSQL   = "mssql"
+	MongoDB = "mongodb"
+	Posgres = "postgres"
+	REST    = "rest"
+	FTP     = "ftp"
+)
+
 type ConfigManager struct {
 	current *BaseConfig
 	mu      sync.RWMutex
@@ -21,11 +30,12 @@ type ConfigManager struct {
 
 var manager = &ConfigManager{}
 
+// BaseConfig implements boiler.Config
 type BaseConfig struct {
-	svc *service  `yaml:"service"`
-	io  dataIO    `yaml:"sources"`
-	log logConfig `yaml:"logging"`
-	ext any       `yaml:"extension,omitempty"`
+	svc     *service  `yaml:"service"`
+	sources []source  `yaml:"sources"`
+	log     logConfig `yaml:"logging"`
+	ext     any       `yaml:"extension,omitempty"`
 }
 
 func (bc *BaseConfig) Validate() error {
@@ -35,11 +45,27 @@ func (bc *BaseConfig) Validate() error {
 	if bc.svc.port == 0 {
 		bc.svc.port = 8080 // Default port
 	}
-	if err := bc.io.Validate(); err != nil {
-		return fmt.Errorf("IO configuration error: %w", err)
+	for _, s := range bc.sources {
+		if err := s.Validate(); err != nil {
+			return fmt.Errorf("source %s: %w", s.nam, err)
+		}
 	}
 	return nil
 }
+
+// Implement boiler.Config interface
+func (bc *BaseConfig) Sources() []boiler.IOWithAuth {
+	result := make([]boiler.IOWithAuth, len(bc.sources))
+	for i, src := range bc.sources {
+		result[i] = src
+	}
+	return result
+}
+
+// Getter methods for BaseConfig
+func (bc *BaseConfig) Service() *service    { return bc.svc }
+func (bc *BaseConfig) LogConfig() logConfig { return bc.log }
+func (bc *BaseConfig) Extension() any       { return bc.ext }
 
 type service struct {
 	name    string `yaml:"name" env:"SERVICE_NAME"`
@@ -47,61 +73,22 @@ type service struct {
 	port    int    `yaml:"port" env:"SERVICE_PORT" default:"8080"`
 }
 
-type dataIO struct {
-	db    []secureSource   `yaml:"databases"`
-	http  []secureSource   `yaml:"http"`
-	other []insecureSource `yaml:"other"`
+type source struct {
+	nam   string       `yaml:"name"`
+	typ   string       `yaml:"type"`
+	enbl  bool         `yaml:"enabled"`
+	loc   string       `yaml:"location"`
+	creds *credentials `yaml:"auth,omitempty"`
 }
 
-func (d *dataIO) Validate() error {
-	for _, db := range d.db {
-		if err := db.Validate(); err != nil {
-			return fmt.Errorf("database %s: %w", db.nam, err)
-		}
-	}
-	return nil
-}
-
-func (s dataIO) Databases() []boiler.IOWithAuth {
-	dbs := make([]boiler.IOWithAuth, len(s.db))
-	for idx, d := range s.db {
-		dbs[idx] = d
-	}
-	return dbs
-}
-
-func (s dataIO) HTTPs() []boiler.IOWithAuth {
-	https := make([]boiler.IOWithAuth, len(s.http))
-	for idx, f := range s.http {
-		https[idx] = f
-	}
-	return https
-}
-
-func (s dataIO) Others() []boiler.IONoAuth {
-	others := make([]boiler.IONoAuth, len(s.other))
-	for idx, f := range s.other {
-		others[idx] = f
-	}
-	return others
-}
-
-type secureSource struct {
-	nam   string      `yaml:"name"`
-	typ   string      `yaml:"type"`
-	enbl  bool        `yaml:"enabled"`
-	loc   string      `yaml:"location"`
-	creds credentials `yaml:"auth"`
-}
-
-func (s *secureSource) Validate() error {
+func (s *source) Validate() error {
 	if s.nam == "" {
 		return errors.New("name is required")
 	}
 	if s.loc == "" {
 		return errors.New("location is required")
 	}
-	if s.enbl {
+	if s.creds != nil {
 		if err := s.creds.Validate(); err != nil {
 			return fmt.Errorf("credentials error: %w", err)
 		}
@@ -110,24 +97,16 @@ func (s *secureSource) Validate() error {
 }
 
 // Implement boiler.IOWithAuth interface
-func (s secureSource) Auth() boiler.Credentials { return s.creds }
-func (s secureSource) Enabled() bool            { return s.enbl }
-func (s secureSource) Type() string             { return s.typ }
-func (s secureSource) Name() string             { return s.nam }
-func (s secureSource) Addr() string             { return s.loc }
-
-type insecureSource struct {
-	nam  string   `yaml:"name"`
-	typ  []string `yaml:"type"`
-	enbl bool     `yaml:"enabled"`
-	loc  string   `yaml:"location"`
+func (s source) Auth() boiler.Credentials {
+	if s.creds == nil {
+		return credentials{} // Return empty credentials if none configured
+	}
+	return *s.creds
 }
-
-// Implement boiler.IONoAuth interface
-func (s insecureSource) Enabled() bool  { return s.enbl }
-func (s insecureSource) Type() []string { return s.typ }
-func (s insecureSource) Name() string   { return s.nam }
-func (s insecureSource) Addr() string   { return s.loc }
+func (s source) Enabled() bool { return s.enbl }
+func (s source) Type() string  { return s.typ }
+func (s source) Name() string  { return s.nam }
+func (s source) Addr() string  { return s.loc }
 
 type credentials struct {
 	uname string `yaml:"username"`
@@ -136,15 +115,14 @@ type credentials struct {
 
 func (c *credentials) Validate() error {
 	if c.uname == "" {
-		return errors.New("username is required for secure sources")
+		return errors.New("username is required when auth is specified")
 	}
 	if c.pwd == "" {
-		return errors.New("password is required for secure sources")
+		return errors.New("password is required when auth is specified")
 	}
 	return nil
 }
 
-// Implement boiler.Credentials interface
 func (c credentials) Username() string { return c.uname }
 func (c credentials) Password() string { return c.pwd }
 
@@ -172,7 +150,6 @@ func (lc logConfig) MinLevel() slog.Level {
 func (lc logConfig) Dir() string      { return lc.folder }
 func (lc logConfig) MaxFileSize() int { return lc.maxSize }
 
-// ExtensionAs converts the generic extension configuration to a specific type
 func ExtensionAs[T any](c *BaseConfig) (T, error) {
 	var result T
 	if c.ext == nil {
@@ -191,7 +168,6 @@ func ExtensionAs[T any](c *BaseConfig) (T, error) {
 	return result, nil
 }
 
-// Load reads and parses the configuration file
 func Load(override string) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -223,12 +199,10 @@ func Load(override string) error {
 	return nil
 }
 
-// Reload refreshes the configuration from disk
-func Reload() error {
-	return Load("")
+func Reload(override string) error {
+	return Load(override)
 }
 
-// Get returns the current configuration in a thread-safe manner
 func Get() *BaseConfig {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
@@ -238,9 +212,3 @@ func Get() *BaseConfig {
 	}
 	return manager.current
 }
-
-// Getter methods for BaseConfig
-func (bc *BaseConfig) Service() *service       { return bc.svc }
-func (bc *BaseConfig) Sources() boiler.Sources { return bc.io }
-func (bc *BaseConfig) LogConfig() logConfig    { return bc.log }
-func (bc *BaseConfig) Extension() any          { return bc.ext }

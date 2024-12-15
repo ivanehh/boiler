@@ -1,13 +1,7 @@
 package boiler
 
 type Config interface {
-	Sources() Sources
-}
-
-type Sources interface {
-	Databases() []IOWithAuth
-	HTTPs() []IOWithAuth
-	Others() []IONoAuth
+	Sources() IOWithAuth
 }
 
 type IOWithAuth interface {
@@ -16,13 +10,6 @@ type IOWithAuth interface {
 	Name() string
 	Addr() string
 	Auth() Credentials
-}
-
-type IONoAuth interface {
-	Enabled() bool
-	Type() []string
-	Name() string
-	Addr() string
 }
 
 type Credentials interface {
