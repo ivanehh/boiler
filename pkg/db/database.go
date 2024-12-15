@@ -67,7 +67,7 @@ type Database struct {
 func NewDatabase(c b.Config, name string, dbDriver string) (*Database, error) {
 	var src b.IOWithAuth
 	var db *Database
-	for _, source := range c.Sources().Databases() {
+	for _, source := range c.Sources() {
 		if source.Enabled() && source.Type() == dbDriver {
 			if strings.Contains(source.Name(), name) {
 				src = source

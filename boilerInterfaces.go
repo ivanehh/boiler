@@ -1,7 +1,7 @@
 package boiler
 
 type Config interface {
-	Sources() IOWithAuth
+	Sources() []IOWithAuth
 }
 
 type IOWithAuth interface {
