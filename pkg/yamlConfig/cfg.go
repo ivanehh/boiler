@@ -32,22 +32,22 @@ var manager = &ConfigManager{}
 
 // BaseConfig implements boiler.Config
 type BaseConfig struct {
-	svc     *service  `yaml:"service"`
-	sources []source  `yaml:"sources"`
-	log     logConfig `yaml:"logging"`
-	ext     any       `yaml:"extension,omitempty"`
+	Svc  service   `yaml:"service"`
+	Srcs []source  `yaml:"sources"`
+	Log  logConfig `yaml:"logging,omitempty"`
+	Ext  any       `yaml:"extension,omitempty"`
 }
 
 func (bc *BaseConfig) Validate() error {
-	if bc.svc == nil {
+	if bc.Svc.Name == "" {
 		return errors.New("service configuration is required")
 	}
-	if bc.svc.port == 0 {
-		bc.svc.port = 8080 // Default port
+	if bc.Svc.Port == 0 {
+		bc.Svc.Port = 8080 // Default port
 	}
-	for _, s := range bc.sources {
+	for _, s := range bc.Srcs {
 		if err := s.Validate(); err != nil {
-			return fmt.Errorf("source %s: %w", s.nam, err)
+			return fmt.Errorf("source %s: %w", s.Nam, err)
 		}
 	}
 	return nil
@@ -55,41 +55,41 @@ func (bc *BaseConfig) Validate() error {
 
 // Implement boiler.Config interface
 func (bc *BaseConfig) Sources() []boiler.IOWithAuth {
-	result := make([]boiler.IOWithAuth, len(bc.sources))
-	for i, src := range bc.sources {
+	result := make([]boiler.IOWithAuth, len(bc.Srcs))
+	for i, src := range bc.Srcs {
 		result[i] = src
 	}
 	return result
 }
 
 // Getter methods for BaseConfig
-func (bc *BaseConfig) Service() *service    { return bc.svc }
-func (bc *BaseConfig) LogConfig() logConfig { return bc.log }
-func (bc *BaseConfig) Extension() any       { return bc.ext }
+func (bc *BaseConfig) Service() service     { return bc.Svc }
+func (bc *BaseConfig) LogConfig() logConfig { return bc.Log }
+func (bc *BaseConfig) Extension() any       { return bc.Ext }
 
 type service struct {
-	name    string `yaml:"name" env:"SERVICE_NAME"`
-	purpose string `yaml:"purpose" env:"SERVICE_PURPOSE"`
-	port    int    `yaml:"port" env:"SERVICE_PORT" default:"8080"`
+	Name    string `yaml:"name" env:"SERVICE_NAME"`
+	Purpose string `yaml:"purpose" env:"SERVICE_PURPOSE"`
+	Port    int    `yaml:"port" env:"SERVICE_PORT" default:"8080"`
 }
 
 type source struct {
-	nam   string       `yaml:"name"`
-	typ   string       `yaml:"type"`
-	enbl  bool         `yaml:"enabled"`
-	loc   string       `yaml:"location"`
-	creds *credentials `yaml:"auth,omitempty"`
+	Nam   string       `yaml:"name"`
+	Typ   string       `yaml:"type"`
+	Enbl  bool         `yaml:"enabled"`
+	Loc   string       `yaml:"location"`
+	Creds *credentials `yaml:"auth,omitempty"`
 }
 
 func (s *source) Validate() error {
-	if s.nam == "" {
+	if s.Nam == "" {
 		return errors.New("name is required")
 	}
-	if s.loc == "" {
+	if s.Loc == "" {
 		return errors.New("location is required")
 	}
-	if s.creds != nil {
-		if err := s.creds.Validate(); err != nil {
+	if s.Creds != nil {
+		if err := s.Creds.Validate(); err != nil {
 			return fmt.Errorf("credentials error: %w", err)
 		}
 	}
@@ -98,15 +98,15 @@ func (s *source) Validate() error {
 
 // Implement boiler.IOWithAuth interface
 func (s source) Auth() boiler.Credentials {
-	if s.creds == nil {
+	if s.Creds == nil {
 		return credentials{} // Return empty credentials if none configured
 	}
-	return *s.creds
+	return *s.Creds
 }
-func (s source) Enabled() bool { return s.enbl }
-func (s source) Type() string  { return s.typ }
-func (s source) Name() string  { return s.nam }
-func (s source) Addr() string  { return s.loc }
+func (s source) Enabled() bool { return s.Enbl }
+func (s source) Type() string  { return s.Typ }
+func (s source) Name() string  { return s.Nam }
+func (s source) Addr() string  { return s.Loc }
 
 type credentials struct {
 	uname string `yaml:"username"`
@@ -152,11 +152,11 @@ func (lc logConfig) MaxFileSize() int { return lc.maxSize }
 
 func ExtensionAs[T any](c *BaseConfig) (T, error) {
 	var result T
-	if c.ext == nil {
+	if c.Ext == nil {
 		return result, errors.New("no extension configuration found")
 	}
 
-	yamlData, err := yaml.Marshal(c.ext)
+	yamlData, err := yaml.Marshal(c.Ext)
 	if err != nil {
 		return result, fmt.Errorf("failed to marshal extension: %w", err)
 	}
