@@ -109,22 +109,22 @@ func (s source) Name() string  { return s.Nam }
 func (s source) Addr() string  { return s.Loc }
 
 type credentials struct {
-	uname string `yaml:"username"`
-	pwd   string `yaml:"password"`
+	Uname string `yaml:"username"`
+	Pwd   string `yaml:"password"`
 }
 
 func (c *credentials) Validate() error {
-	if c.uname == "" {
+	if c.Uname == "" {
 		return errors.New("username is required when auth is specified")
 	}
-	if c.pwd == "" {
+	if c.Pwd == "" {
 		return errors.New("password is required when auth is specified")
 	}
 	return nil
 }
 
-func (c credentials) Username() string { return c.uname }
-func (c credentials) Password() string { return c.pwd }
+func (c credentials) Username() string { return c.Uname }
+func (c credentials) Password() string { return c.Pwd }
 
 type logConfig struct {
 	level   string `yaml:"level" env:"LOG_LEVEL" default:"info"`
