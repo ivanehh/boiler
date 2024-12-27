@@ -7,7 +7,11 @@ import (
 	"fmt"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/ivanehh/boiler"
+	_ "github.com/lib/pq"               // PostgreSQL
+	_ "github.com/mattn/go-sqlite3"     // SQLite
+	_ "github.com/microsoft/go-mssqldb" // MSSQL
 )
 
 // Common errors
@@ -198,7 +202,6 @@ func buildConnString(source boiler.IOWithAuth) string {
 
 	case "mysql":
 		// Format: username:password@tcp(host:port)/database
-		// Note: if port is included in Addr(), it will be used automatically
 		return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true",
 			source.Auth().Username(),
 			source.Auth().Password(),
