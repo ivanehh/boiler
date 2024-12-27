@@ -10,6 +10,11 @@ import (
 	"strings"
 
 	b "github.com/ivanehh/boiler"
+
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"               // PostgreSQL
+	_ "github.com/mattn/go-sqlite3"     // SQLite
+	_ "github.com/microsoft/go-mssqldb" // MSSQL
 )
 
 type dbMode int
