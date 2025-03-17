@@ -1,4 +1,4 @@
-package utils
+package datamanagement
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ivanehh/boiler/internal/helpers/errors"
 	"github.com/ivanehh/boiler/pkg/logging"
 	"github.com/pbnjay/grate"
 	_ "github.com/pbnjay/grate/simple"
@@ -138,7 +139,7 @@ func WithRecordsFromFiles(filePaths []string) DfOpts {
 						if strings.Contains(r[0], ",") {
 							if cr = cleanRecord(strings.Split(r[0], ",")); len(cr) > 0 {
 								if slices.Compare(head, cr) != 0 {
-									return &HeaderMismatchErr{
+									return &errors.HeaderMismatchErr{
 										Original: head,
 										Mismatch: cr,
 									}
@@ -147,7 +148,7 @@ func WithRecordsFromFiles(filePaths []string) DfOpts {
 						} else {
 							if cr = cleanRecord(r); len(cr) > 0 {
 								if slices.Compare(head, cr) != 0 {
-									return &HeaderMismatchErr{
+									return &errors.HeaderMismatchErr{
 										Original: head,
 										Mismatch: cr,
 									}
@@ -212,7 +213,7 @@ func WithInterpretedColumns() DfOpts {
 func interpretColumns(d *Dataframe, h []string) error {
 	if r := slices.Compare(h, d.Rows[0]); r != 0 {
 		// TODO: header mismatch error
-		return &HeaderInterpretErr{Provided: h, Found: d.Rows[0]}
+		return &errors.HeaderInterpretErr{Provided: h, Found: d.Rows[0]}
 	}
 	for idx, str := range h {
 		d.Columns = append(d.Columns, Column{
@@ -257,7 +258,7 @@ func (d *Dataframe) Get(row int, columns ...string) (*Dataframe, error) {
 		}
 	}
 	if len(dnew.Columns) != len(columns) {
-		return nil, &ColumnsNotFoundErr{
+		return nil, &errors.ColumnsNotFoundErr{
 			Available: d.Header(),
 			Required:  columns,
 		}
