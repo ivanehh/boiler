@@ -48,7 +48,6 @@ func NewHTTPClient(opts ...HTTPClientOpt) *HTTPClient {
 	return h
 }
 
-// TODO: Make this concurrently safe
 func (e *HTTPClient) SetURL(url *url.URL) *HTTPClient {
 	e.Lock()
 	defer e.Unlock()
@@ -81,4 +80,15 @@ func (e *HTTPClient) Get(u *url.URL) (*http.Response, error) {
 		u = e.Url
 	}
 	return e.client.Get(u.String())
+}
+
+func (e *HTTPClient) Do(method string, header http.Header, u *url.URL, content []byte) (*http.Response, error) {
+	req, err := http.NewRequest(method, u.String(), bytes.NewBuffer(content))
+	if header != nil {
+		req.Header = header
+	}
+	if err != nil {
+		return nil, err
+	}
+	return e.client.Do(req)
 }

@@ -9,23 +9,27 @@ import (
 	"strings"
 
 	"github.com/ivanehh/boiler/internal/helpers/errors"
-	"github.com/ivanehh/boiler/pkg/logging"
 	"github.com/pbnjay/grate"
 	_ "github.com/pbnjay/grate/simple"
 	_ "github.com/pbnjay/grate/xls"
 )
 
-var l *logging.DCSlogger
-
 type (
-	DfOpts       func(d *Dataframe) error
+	DfOpt        func(d *Dataframe) error
 	BadDataframe struct{}
+	Column       struct {
+		name    string
+		idx     int
+		content []string
+	}
+
+	Record []string
 )
 
 type Dataframe struct {
-	Columns          []Column
-	Rows             []Record
-	interpretColumns bool
+	Columns []Column
+	Rows    []Record
+	cleaned bool
 }
 
 // DfRowsAsStructList the dataframe as a []sType representation; sType must have 'df' tags
@@ -46,7 +50,6 @@ func DfRowsAsStructList[sType any](d *Dataframe) ([]sType, error) {
 				continue
 			}
 			if !slices.Contains(d.Header(), fieldTag) {
-				l.Warn("header-mismatch", fmt.Errorf("%s not found in %v", fieldTag, d.Header()))
 				continue
 			}
 			for cid := range d.Columns {
@@ -75,14 +78,6 @@ func DfRowsAsStructList[sType any](d *Dataframe) ([]sType, error) {
 	return result, nil
 }
 
-type Column struct {
-	name    string
-	idx     int
-	content []string
-}
-
-type Record []string
-
 func (d *Dataframe) Header() []string {
 	header := make([]string, len(d.Columns))
 	for i := range d.Columns {
@@ -91,7 +86,7 @@ func (d *Dataframe) Header() []string {
 	return header
 }
 
-func WithRecordsFromText(b []byte, newLine string, sep string) DfOpts {
+func WithRecordsFromText(b []byte, newLine string, sep string) DfOpt {
 	return func(d *Dataframe) error {
 		csvRecords := bytes.Split(b, []byte(newLine))
 		for _, r := range csvRecords {
@@ -106,7 +101,7 @@ func WithRecordsFromText(b []byte, newLine string, sep string) DfOpts {
 	}
 }
 
-func WithRecordsFromFiles(filePaths []string) DfOpts {
+func WithRecordsFromFiles(filePaths []string) DfOpt {
 	return func(d *Dataframe) error {
 		var head []string
 		for idx, fp := range filePaths {
@@ -183,6 +178,18 @@ func WithRecordsFromFiles(filePaths []string) DfOpts {
 	}
 }
 
+func WithCleanerFunc(cleaner func(*Dataframe) ([]Record, error)) DfOpt {
+	return func(d *Dataframe) error {
+		rows, err := cleaner(d)
+		if err != nil {
+			return err
+		}
+		d.cleaned = true
+		d.Rows = rows
+		return nil
+	}
+}
+
 func cleanRecord(r []string) Record {
 	newR := make(Record, 0)
 	for idx := range r {
@@ -193,37 +200,38 @@ func cleanRecord(r []string) Record {
 	return newR
 }
 
-func WithProvidedColumns(h []string) DfOpts {
+// WithProvidedColumns does not remove the first row of the dataframe!
+func WithProvidedColumns(h []string) DfOpt {
 	return func(d *Dataframe) error {
-		err := interpretColumns(d, h)
-		if err != nil {
-			return err
+		if r := slices.Compare(h, d.Rows[0]); r != 0 {
+			// TODO: header mismatch error
+			return &errors.HeaderInterpretErr{Provided: h, Found: d.Rows[0]}
+		}
+
+		for idx, str := range h {
+			d.Columns = append(d.Columns, Column{
+				name:    strings.ToLower(strings.ReplaceAll(str, " ", "")),
+				idx:     idx,
+				content: make([]string, 0),
+			})
 		}
 		return nil
 	}
 }
 
-func WithInterpretedColumns() DfOpts {
+// WithInterpretedColumns uses the first row of the dataframe to interpret the column names; it then removes the row from the dataframe; this is the default behavior
+func WithInterpretedColumns() DfOpt {
 	return func(d *Dataframe) error {
-		d.interpretColumns = true
+		for idx, str := range d.Rows[0] {
+			d.Columns = append(d.Columns, Column{
+				name:    strings.ToLower(strings.ReplaceAll(str, " ", "")),
+				idx:     idx,
+				content: make([]string, 0),
+			})
+		}
+		d.Rows = d.Rows[1:]
 		return nil
 	}
-}
-
-func interpretColumns(d *Dataframe, h []string) error {
-	if r := slices.Compare(h, d.Rows[0]); r != 0 {
-		// TODO: header mismatch error
-		return &errors.HeaderInterpretErr{Provided: h, Found: d.Rows[0]}
-	}
-	for idx, str := range h {
-		d.Columns = append(d.Columns, Column{
-			name:    strings.ToLower(strings.ReplaceAll(str, " ", "")),
-			idx:     idx,
-			content: make([]string, 0),
-		})
-	}
-	d.Rows = d.Rows[1:]
-	return nil
 }
 
 // Drop a range of rows from the dataframe
@@ -275,12 +283,12 @@ func (d *Dataframe) clean() {
 		if len(r) == dfWidth && !strings.EqualFold(d.Header()[0], cleanRecord(r)[0]) {
 			cleanRecords = append(cleanRecords, r)
 		}
+		fmt.Printf("removing record:length(%s)-required(%s)", len(r), dfWidth)
 	}
 	d.Rows = cleanRecords
 }
 
-func NewDataframe(opts ...DfOpts) (*Dataframe, error) {
-	l = logging.Provide()
+func NewDataframe(opts ...DfOpt) (*Dataframe, error) {
 	df := new(Dataframe)
 	for _, opt := range opts {
 		err := opt(df)
@@ -289,9 +297,8 @@ func NewDataframe(opts ...DfOpts) (*Dataframe, error) {
 			return nil, err
 		}
 	}
-	if df.interpretColumns {
-		interpretColumns(df, df.Rows[0])
+	if !df.cleaned {
+		df.clean()
 	}
-	df.clean()
 	return df, nil
 }

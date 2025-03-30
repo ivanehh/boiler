@@ -42,14 +42,6 @@ func SetLoc(loc []string) FileFilterOption {
 	}
 }
 
-// WARN: Not implemented; has no effect on behavior
-func Drill() FileFilterOption {
-	return func(ff *FileFilter) error {
-		ff.drill = true
-		return nil
-	}
-}
-
 func NewFileFilter(opts ...FileFilterOption) (*FileFilter, error) {
 	ff := new(FileFilter)
 	for _, opt := range opts {
