@@ -1,14 +1,14 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
+	"text/template"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/ivanehh/boiler"
 	_ "github.com/lib/pq"               // PostgreSQL
 	_ "github.com/mattn/go-sqlite3"     // SQLite
 	_ "github.com/microsoft/go-mssqldb" // MSSQL
@@ -16,6 +16,7 @@ import (
 
 // Common errors
 var (
+	ErrBadConfig    = errors.New("the configuration provided is missing fields or has bad values in the provided fields")
 	ErrNoConnection = errors.New("database connection not initialized")
 	ErrNoRows       = sql.ErrNoRows
 )
@@ -28,70 +29,68 @@ type DB struct {
 }
 
 // Config represents database configuration
-type Config struct {
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxLifetime time.Duration
-	ConnMaxIdleTime time.Duration
-}
-
-// DefaultConfig provides sensible defaults for database configuration
-func DefaultConfig() Config {
-	return Config{
-		MaxOpenConns:    25,
-		MaxIdleConns:    5,
-		ConnMaxLifetime: 5 * time.Minute,
-		ConnMaxIdleTime: 1 * time.Minute,
-	}
-}
-
-var dbConfig = DefaultConfig()
-
-func ChangeConfig(db *DB, c Config) {
-	dbConfig = c
-	db.SetMaxOpenConns(dbConfig.MaxOpenConns)
-	db.SetMaxIdleConns(dbConfig.MaxIdleConns)
-	db.SetConnMaxLifetime(dbConfig.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(dbConfig.ConnMaxIdleTime)
+type DatabaseConfig struct {
+	Driver      string `json:"driver"`
+	Name        string `json:"name"`
+	Address     string `json:"address"`
+	Credentials struct {
+		Name     string `json:"name"`
+		Password string `json:"password"`
+	} `json:"credentials"`
+	/* 	 ConnectionStringTemplate example:"sqlserver://{{.Credentials.Name}}:{{.Credentials.Password}}@{{.Address}}/?database={{.Name}}" */
+	ConnectionStringTemplate *template.Template
 }
 
 // New creates a new database connection
-func New(source boiler.IOWithAuth) (*DB, error) {
-	connString := buildConnString(source)
+type Database struct {
+	Config     DatabaseConfig
+	db         *sql.DB
+	connString string
+	prepStmts  map[string]*sql.Stmt
+	open       bool
+}
 
-	db := &DB{
-		driver:     source.Type(),
-		connString: connString,
+func ValidateConfig(c DatabaseConfig) error {
+	valid := len(c.Address) != 0 && len(c.Driver) != 0 && c.ConnectionStringTemplate != nil && len(c.Credentials.Name) != 0 && len(c.Credentials.Password) != 0
+	if !valid {
+		return ErrBadConfig
 	}
+	return nil
+}
 
-	if err := db.connect(); err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+func NewDatabase(c DatabaseConfig, name string) (*Database, error) {
+	if err := ValidateConfig(c); err != nil {
+		return nil, err
 	}
-	// Configure connection pool
-	db.SetMaxOpenConns(dbConfig.MaxOpenConns)
-	db.SetMaxIdleConns(dbConfig.MaxIdleConns)
-	db.SetConnMaxLifetime(dbConfig.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(dbConfig.ConnMaxIdleTime)
+	connectionString := bytes.NewBuffer([]byte{})
+	db := new(Database)
+	db.Config = c
+	err := db.Config.ConnectionStringTemplate.Execute(connectionString, db.Config)
+	if err != nil {
+		return nil, err
+	}
+	db.connString = connectionString.String()
+
 	return db, nil
 }
 
-// connect establishes the database connection and configures the connection pool
-func (db *DB) connect() error {
-	// TODO: Currently the config does nothing upon attempting connectiong
+func (pdb *Database) Open() error {
 	var err error
-	db.DB, err = sql.Open(db.driver, db.connString)
+	pdb.db, err = sql.Open(pdb.Config.Driver, pdb.connString)
 	if err != nil {
-		return fmt.Errorf("failed to open database connection: %w", err)
+		return err
 	}
+	pdb.open = true
+	pdb.prepStmts = make(map[string]*sql.Stmt)
+	return nil
+}
 
-	// Verify connection
-	if err := db.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %w", err)
+func (pdb *Database) Close() error {
+	err := pdb.db.Close()
+	if err != nil {
+		return err
 	}
-	// Test connection with context and timeout
-	_, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
+	pdb.open = false
 	return nil
 }
 
@@ -181,33 +180,4 @@ func (db *DB) Health(ctx context.Context) error {
 	}
 
 	return db.PingContext(ctx)
-}
-
-// buildConnString creates a connection string from the source configuration
-func buildConnString(source boiler.IOWithAuth) string {
-	switch source.Type() {
-	case "postgres":
-		return fmt.Sprintf("postgresql://%s:%s@%s/%s?sslmode=disable",
-			source.Auth().Username(),
-			source.Auth().Password(),
-			source.Addr(),
-			source.Name())
-	case "mssql":
-		// Format: sqlserver://username:password@host/database?param1=value&param2=value
-		return fmt.Sprintf("sqlserver://%s:%s@%s?database=%s",
-			source.Auth().Username(),
-			source.Auth().Password(),
-			source.Addr(),
-			source.Name())
-
-	case "mysql":
-		// Format: username:password@tcp(host:port)/database
-		return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true",
-			source.Auth().Username(),
-			source.Auth().Password(),
-			source.Addr(),
-			source.Name())
-	default:
-		return ""
-	}
 }
