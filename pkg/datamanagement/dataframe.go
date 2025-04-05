@@ -283,7 +283,7 @@ func (d *Dataframe) clean() {
 		if len(r) == dfWidth && !strings.EqualFold(d.Header()[0], cleanRecord(r)[0]) {
 			cleanRecords = append(cleanRecords, r)
 		}
-		fmt.Printf("removing record:length(%s)-required(%s)", len(r), dfWidth)
+		fmt.Printf("removing record:length(%d)-required(%s)", len(r), dfWidth)
 	}
 	d.Rows = cleanRecords
 }

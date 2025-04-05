@@ -2,49 +2,56 @@ package db
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"text/template"
-
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"               // PostgreSQL
-	_ "github.com/mattn/go-sqlite3"     // SQLite
-	_ "github.com/microsoft/go-mssqldb" // MSSQL
+	"html/template"
+	"reflect"
 )
 
-// Common errors
-var (
-	ErrBadConfig    = errors.New("the configuration provided is missing fields or has bad values in the provided fields")
-	ErrNoConnection = errors.New("database connection not initialized")
-	ErrNoRows       = sql.ErrNoRows
-)
+var ErrBadConfig = errors.New("the configuration provided is missing fields or has bad values in the provided fields")
 
-// DB wraps sql.DB to provide additional functionality
-type DB struct {
-	*sql.DB
-	driver     string
-	connString string
+type dbMode int
+
+type QueryConstructor interface {
+	Construct() string
 }
 
-// Config represents database configuration
+type QueryWrapper interface {
+	Wrap(*sql.Rows)
+}
+
+type QueryUnwrapper interface {
+	Unwrap() any
+}
+
+type Query interface {
+	QueryConstructor
+	QueryWrapper
+	QueryUnwrapper
+}
+
+const (
+	stage dbMode = iota
+	prod  dbMode = iota
+)
+
+// DatabaseConfig provides the necessary configuration for Database initiailization; All fields must be filled
 type DatabaseConfig struct {
-	Driver      string `json:"driver"`
-	Name        string `json:"name"`
-	Address     string `json:"address"`
+	Driver      string `json:"driver" yaml:"driver"`
+	Name        string `json:"name" yaml:"name"`
+	Address     string `json:"address" yaml:"address"`
 	Credentials struct {
-		Name     string `json:"name"`
-		Password string `json:"password"`
-	} `json:"credentials"`
+		Name     string `json:"name" yaml:"name"`
+		Password string `json:"password" yaml:"password"`
+	} `json:"credentials" yaml:"credentials"`
 	/* 	 ConnectionStringTemplate example:"sqlserver://{{.Credentials.Name}}:{{.Credentials.Password}}@{{.Address}}/?database={{.Name}}" */
 	ConnectionStringTemplate *template.Template
 }
 
-// New creates a new database connection
 type Database struct {
+	*sql.DB
 	Config     DatabaseConfig
-	db         *sql.DB
 	connString string
 	prepStmts  map[string]*sql.Stmt
 	open       bool
@@ -71,22 +78,17 @@ func NewDatabase(c DatabaseConfig, name string) (*Database, error) {
 	}
 	db.connString = connectionString.String()
 
+	db.DB, err = sql.Open(db.Config.Driver, db.connString)
+	if err != nil {
+		return nil, err
+	}
+	db.open = true
+	db.prepStmts = make(map[string]*sql.Stmt)
 	return db, nil
 }
 
-func (pdb *Database) Open() error {
-	var err error
-	pdb.db, err = sql.Open(pdb.Config.Driver, pdb.connString)
-	if err != nil {
-		return err
-	}
-	pdb.open = true
-	pdb.prepStmts = make(map[string]*sql.Stmt)
-	return nil
-}
-
 func (pdb *Database) Close() error {
-	err := pdb.db.Close()
+	err := pdb.DB.Close()
 	if err != nil {
 		return err
 	}
@@ -94,90 +96,37 @@ func (pdb *Database) Close() error {
 	return nil
 }
 
-type Scanner[T any] func(*sql.Rows) (T, error)
-
-type SingleRowScanner[T any] func(*sql.Row) (T, error)
-
-func QueryRow[T any](ctx context.Context, db *DB, query string, scanner SingleRowScanner[T], args ...any) (T, error) {
-	if db.DB == nil {
-		var zero T
-		return zero, ErrNoConnection
-	}
-
-	row := db.QueryRowContext(ctx, query, args...)
-	return scanner(row)
-}
-
-func QueryRows[T any](ctx context.Context, db *DB, query string, scanner Scanner[T], args ...any) ([]T, error) {
-	if db.DB == nil {
-		return nil, ErrNoConnection
-	}
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query execution failed: %w", err)
-	}
-	defer rows.Close()
-
-	var results []T
-	for rows.Next() {
-		result, err := scanner(rows)
+func (pdb *Database) QueryWrappedValues(qc Query, params ...any) (QueryUnwrapper, error) {
+	var stmt *sql.Stmt
+	var ok bool
+	var err error
+	defer pdb.Close()
+	if stmt, ok = pdb.prepStmts[reflect.TypeOf(qc).Name()]; !ok {
+		stmt, err = pdb.Prepare(qc.Construct())
 		if err != nil {
-			return nil, fmt.Errorf("row scan failed: %w", err)
+			return nil, err
 		}
-		results = append(results, result)
-	}
+		pdb.prepStmts[reflect.TypeOf(qc).Name()] = stmt
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
 	}
-
-	return results, nil
+	q, err := stmt.Query(params...)
+	if err != nil {
+		return nil, err
+	}
+	qc.Wrap(q)
+	return qc, nil
 }
 
-// Exec executes a query that doesn't return rows (INSERT, UPDATE, DELETE)
-func (db *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	if db.DB == nil {
-		return nil, ErrNoConnection
-	}
-
-	result, err := db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("exec failed: %w", err)
-	}
-
-	return result, nil
-}
-
-func (db *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
-	if db.DB == nil {
-		return ErrNoConnection
-	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	if err := fn(tx); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("error: %v, rollback error: %v", err, rbErr)
+func (pdb *Database) ExecuteConstructor(qc QueryConstructor, params ...any) (sql.Result, error) {
+	var stmt *sql.Stmt
+	var ok bool
+	var err error
+	if stmt, ok = pdb.prepStmts[reflect.TypeOf(qc).Name()]; !ok {
+		stmt, err = pdb.Prepare(qc.Construct())
+		if err != nil {
+			return nil, fmt.Errorf("statement construction error:%w", err)
 		}
-		return err
+		pdb.prepStmts[reflect.TypeOf(qc).Name()] = stmt
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
-}
-
-// Health performs a health check on the database
-func (db *DB) Health(ctx context.Context) error {
-	if db.DB == nil {
-		return ErrNoConnection
-	}
-
-	return db.PingContext(ctx)
+	return stmt.Exec(params...)
 }

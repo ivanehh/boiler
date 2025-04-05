@@ -9,10 +9,11 @@ import (
 
 type FileFilterOption func(*FileFilter) error
 
+// FileFilter operates and filters files over a range of fs.FS objects
 type FileFilter struct {
 	pattern string
 	maxAge  time.Duration
-	dir     []string
+	dir     map[string]fs.FS
 	matches []string
 	drill   bool
 }
@@ -37,7 +38,9 @@ func WithFileAge(d time.Duration) FileFilterOption {
 
 func SetLoc(loc []string) FileFilterOption {
 	return func(ff *FileFilter) error {
-		ff.dir = loc
+		for _, location := range loc {
+			ff.dir[location] = os.DirFS(location)
+		}
 		return nil
 	}
 }
@@ -53,20 +56,23 @@ func NewFileFilter(opts ...FileFilterOption) (*FileFilter, error) {
 	return ff, nil
 }
 
-func (ff *FileFilter) SetDirs(d []string) {
-	ff.dir = d
+func (ff *FileFilter) SetPattern(p string) error {
+	if _, err := fs.Glob(os.DirFS(""), p); err != nil {
+		return err
+	}
+	ff.pattern = p
+	return nil
 }
 
 // Filter filters the files in the provided directories and returns a list of absolute file paths
 func (ff FileFilter) Filter() ([]string, error) {
-	for _, d := range ff.dir {
-		matches, err := fs.Glob(os.DirFS(d), ff.pattern)
+	// loop over the registered file systems
+	for path, fsys := range ff.dir {
+		matches, err := fs.Glob(fsys, ff.pattern)
 		if err != nil {
 			return nil, err
 		}
-		for idx := range matches {
-			matches[idx] = filepath.Join(d, matches[idx])
-		}
+		// if the age filter is set
 		if ff.maxAge != 0 {
 			for _, m := range matches {
 				f, err := os.Open(m)
@@ -81,6 +87,11 @@ func (ff FileFilter) Filter() ([]string, error) {
 				f.Close()
 			}
 			continue
+		}
+
+		// enrich the found files with the rest of the path stucture before returning
+		for idx, m := range matches {
+			matches[idx] = filepath.Join(path, m)
 		}
 		ff.matches = append(ff.matches, matches...)
 	}
